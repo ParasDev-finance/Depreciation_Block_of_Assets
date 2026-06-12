@@ -210,3 +210,80 @@ pub fn ingest_csv_data(csv_data: &str) -> Result<Vec<AssetBlock>, Box<dyn Error>
 fn main() {
     println!("Welcome to the IronLedger Depreciation Engine!");
 }
+
+
+// ==============================================================================
+// 6. RED TEAM: FUZZING & SECURITY AUDIT SUITE
+// ==============================================================================
+
+#[cfg(test)]
+mod tests {
+    // Import everything from the main file
+    use super::*;
+    
+    // Import the fuzzer tools
+    use proptest::prelude::*;
+    use proptest::num::f64::ANY;
+
+    proptest! {
+        // Force the fuzzer to run 10,000 times instead of the default 256
+        #![proptest_config(ProptestConfig::with_cases(10_000))]
+        
+        // ----------------------------------------------------------------------
+        // AUDIT 1: Standard Mathematical Constraints
+        // ----------------------------------------------------------------------
+        #[test]
+        fn fuzz_test_wdv_is_never_negative(
+            // Generate random floats between 0 and 1 Billion
+            random_opening in 0.0f64..1_000_000_000.0,
+            random_addition in 0.0f64..1_000_000_000.0,
+            random_sale in 0.0f64..2_000_000_000.0,
+        ) {
+            let block = AssetBlock {
+                class: AssetClass::PlantAndMachinery(PlantType::General),
+                opening_wdv: random_opening,
+                additions_more_than_180_days: random_addition,
+                additions_less_than_180_days: 0.0,
+                sale_consideration: random_sale,
+                is_block_empty: false,
+            };
+
+            let result = block.calculate_depreciation();
+
+            // Only test the math if the engine accepted the inputs as valid
+            if let Ok(safe_result) = result {
+                prop_assert!(safe_result.closing_wdv >= 0.0, "CRITICAL VULNERABILITY: WDV dropped below zero!");
+                prop_assert!(safe_result.normal_depreciation >= 0.0, "CRITICAL VULNERABILITY: Negative depreciation calculated!");
+            }
+        }
+
+        // ----------------------------------------------------------------------
+        // AUDIT 2: IEEE 754 Memory Corruption Attack (NaN / Infinity)
+        // ----------------------------------------------------------------------
+        #[test]
+        fn fuzz_test_survives_memory_corruption(
+            // ANY strategy injects pure chaos, including NaN and +/- Infinity
+            random_opening in ANY,
+            random_addition in ANY,
+            random_sale in ANY,
+        ) {
+            let block = AssetBlock {
+                class: AssetClass::Building(BuildingType::Commercial),
+                opening_wdv: random_opening,
+                additions_more_than_180_days: random_addition,
+                additions_less_than_180_days: 0.0,
+                sale_consideration: random_sale,
+                is_block_empty: false,
+            };
+
+            let result = block.calculate_depreciation();
+
+            // If the engine fails to block the poison, it returns Ok() with corrupted data.
+            // The assertion will then evaluate NaN >= 0.0 (which is false) and trigger the alarm.
+            if let Ok(safe_result) = result {
+                prop_assert!(safe_result.closing_wdv >= 0.0, "CRITICAL: Engine failed to block negative or NaN values!");
+                prop_assert!(safe_result.normal_depreciation >= 0.0, "CRITICAL: Engine failed to block negative or NaN values!");
+            }
+        }
+    }
+}
